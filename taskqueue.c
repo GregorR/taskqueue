@@ -338,6 +338,18 @@ void beginTask(int fd, short event, void *taskVp)
     enqueueTask(task);
 }
 
+/* a task is runnable if there is no identical task currently running */
+int taskIsRunnable(struct Task *task)
+{
+    int i;
+
+    for (i = 0; i < curTasks.bufused; i++) {
+        if (!strcmp(curTasks.buf[i]->cmd, task->cmd)) return 0;
+    }
+
+    return 1;
+}
+
 /* add this task either immediately to be run, or to a task queue */
 void enqueueTask(struct Task *task)
 {
@@ -358,18 +370,6 @@ void enqueueTask(struct Task *task)
 
     /* add it to the queue */
     WRITE_ONE_BUFFER(taskQueue, task);
-}
-
-/* a task is runnable if there is no identical task currently running */
-int taskIsRunnable(struct Task *task)
-{
-    int i;
-
-    for (i = 0; i < curTasks.bufused; i++) {
-        if (!strcmp(curTasks.buf[i]->cmd, task->cmd)) return 0;
-    }
-
-    return 1;
 }
 
 /* actually run this task */
