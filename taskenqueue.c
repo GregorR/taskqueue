@@ -32,8 +32,8 @@ int main(int argc, char **argv)
     char buf[BUFSZ];
     ssize_t rd, wr;
 
-    if (argc < 7) {
-        fprintf(stderr, "Use: taskenqueue <socket> <begin> <notify> <max block> <email> <cmd>\n");
+    if (argc < 8) {
+        fprintf(stderr, "Use: taskenqueue <socket> <begin> <notify> <max block> <email> <subject> <cmd>\n");
         return 1;
     }
 
@@ -46,7 +46,7 @@ int main(int argc, char **argv)
     /* write the command */
     for (i = 2; i < argc; i++) {
         if (i != 2)
-            wr = write(sock, " ", 1);
+            wr = write(sock, (i < 8) ? "," : " ", 1);
         wr = write(sock, argv[i], strlen(argv[i]));
     }
     wr = write(sock, "\n", 1);

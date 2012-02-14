@@ -1,0 +1,550 @@
+#!/bin/bash
+#
+#  This script takes ascii files, assembles them into a mime compliant
+#  message and mails them.  You can send ascii attachments.  A recipient
+#  with a mime aware user agent will be able to use the agent's built-in
+#  tools for attachments.  On the other hand, a recipient with an older
+#  non-mime user agent will see a message that is completely in ascii and
+#  will be able to easily chop the pieces up manually.
+#
+#
+#  Options 
+#
+#  -t to address (required)
+#  -T to name    (optional)
+#  -f from addr  (optional)
+#  -F from name  (optional)
+#  -b body       (optional)
+#  -s subject    (optional)
+#  -A attachment (optional)
+#  -B attachment (optional)
+#  -X attachment (optional)
+#  -D description(optional)
+#
+#  mimesender -t "Joe Blow" -T jblow@abc.com  -b body.txt  -A attach.txt
+#
+#  Here body.txt and attach.txt are files.  The name of the body file
+#  isn't too important.  The name of the attachment file is important 
+#  since it will be sent as well as the contents.  A Microsoft OS uses
+#  the name to figure out what to do.  It knows what a .txt file is but
+#  it will get mixed up with a .junk file. You can use the -D option to 
+#  send one a different name like this:
+#  mimesender -t jblow@abc.com -T "Joe Blow" -b body -A junk -D junk.txt
+#
+#  You can use several -t -T pairs to indicate multiple recipients.  The number
+#  of pairs is limits by your shell's limit on array elements.
+#
+#  Here the attachment will come from a local file called "junk" but will
+#  be sent with a name of "junk.txt".
+#
+#  Either the body or an attachment can be - in which case it will be read
+#  from the script's standard in.  If you do this with an attachment, a -D
+#  would be especially useful.  Only one item, either the body or an 
+#  attachment can come from standard in.
+#
+#  Multiple attachments can be sent by using several -A options.  A -D 
+#  always refers to the last -A ( or -B or -X, see below) that preceded 
+#  it.  Each attachment specified by a -A can be followed by a -D to 
+#  rename it at the recieving end.  The number of  -A and -D pairs is 
+#  limited only by your shells limit on an array.  ksh will
+#  always allow at least 512 elements.  bash allows more than that. 
+#
+#  -B is like -A, but it is for binary attachments.  They will be uuencoded
+#  before being sent.
+#
+#  -X is like a hybrid of -A and -B.  The attachment is ascii, but it will 
+#  be uuencoded anyway.  But before it is uuencoded, it will have the 
+#  newline characters replaced with LF/CR pairs.
+#
+#  By default, this script will use the unix id which is running it as the
+#  "From:" address.  And it will poke around in the GCOS field of /etc/passwd
+#  to get the name of the user.  You can override the the name with the -F 
+#  option.  This is fairly innocuous.  Many version of unix allow you to run
+#  a command to update your GCOS field, and you can use that to change your
+#  name, send some mail, and change it back.  The -F just saves you some time.
+#  You can use -F to send mail under your screen name, or whatever.
+#
+#  I have also included a -f to override the address on the "From:" line.  
+#  The -f may or may not work, it depends on your MTA's security policy.  If 
+#  it works at all, you must use a local address.  If you use a -f, the script
+#  will also output a "Sender:" line with the real id running the script.  With
+#  or without that "Sender:" line, the MTA's that I have tested ensure that a
+#  mail expert on the receiving system can determine the real sender.  Use -f
+#  with caution, please.  You must ensure that the address you specify can
+#  receive replys.  
+#
+#  -d is a secret debug option.
+
+#############################################################
+#                                                           #
+#    Section 0 ---  Customization                           #
+#                                                           #
+#############################################################
+#
+#  You may need to customize a few things:
+#  1  You must set the first line above to be the path to 
+#     a shell.  mimesender will work with either ksh or bash.
+#     The variable "this_shell" should then automatically set
+#     itself to the shell you used based on the existence or
+#     non-existence on the bash variable BASH_VERSION.  The 
+#     rest of the script will check this_shell as needed.  Note
+#     that a recent version of bash will be needed as it must
+#     support arrays.  If you have both ksh and bash available,
+#     go with ksh for the best performance.
+#
+#  2  Your PATH must contain the commands cat and id and sed
+#     For binary attachment, your PATH must also include 
+#     uuencode
+#
+#  3  MTA must be set to the path to your Mail Transfer Agent
+#
+#  4  BOUNDARY must be a string that is not used in the files
+#     you want to mail.  Actually it must not appear on a line
+#     by itself prepended with two hyphens.  This script can 
+#     mail itself.
+#
+#  5  pwentry must be set to the user's entry from /etc/passwd
+#     If you are using nis or nis+, or something, you must use
+#     niscat or whatever.  pwentry will be treated as a bunch of
+#     colon delimited fields.  Field one will be used for the 
+#     sender's email address.  Field four will be treated as bunch
+#     of comma delimited sub-fields.  The first one will be used as
+#     the sender's name.  This is the standard way that unix mailers
+#     have always worked.
+#     
+
+[[ -n $BASH_VERSION ]] && this_shell=bash || this_shell=ksh
+PATH=/bin:/usr/bin:/usr/local/bin
+export PATH
+MTA=/usr/sbin/sendmail
+BOUNDARY='=== This is the boundary between parts of the message. ===--'
+pwentry=$(grep "^$(id -un):" /etc/passwd)
+
+################################################################
+####  In theory you should not need to touch anything else  ####
+################################################################
+
+
+#############################################################
+#                                                           #
+#    Section 0 ---  Initialization                          #
+#                                                           #
+#############################################################
+
+#
+#  For shell independence, mimesender does its outputting via the functions:
+#  scribe_out and scribe_err.  Here we define these functions for the
+#  current shell.
+#
+
+if [[ $this_shell = ksh ]] ; then
+        scribe_out() { print - ${1+"$@"} ; }
+        scribe_err() { print -u2 - error: ${1+"$@"} ; }
+else
+        scribe_out() { echo -E ${1+"$@"} ; }
+        scribe_err() { echo -E error: ${1+"$@"} >&2 ; }
+fi
+
+
+
+#
+#  Debugging features
+
+DEBUG=0
+DEBUGFILE=mimesender$$
+
+if [[ $this_shell = ksh ]] ; then
+        scribe_debug() { ((DEBUG)) && print -u2 - DEBUG: ${1+"$@"} ; }
+else
+        scribe_debug() { ((DEBUG)) && echo -E DEBUG: ${1+"$@"} >&2 ; }
+fi
+
+debug_mta() 
+{
+	exec 4>&1 >$DEBUGFILE
+	scribe_out
+	scribe_out
+	while (($#)) ; do scribe_out mta arg = "$1" ; shift ; done
+	scribe_out
+	scribe_out start of mail
+	while read l ; do scribe_out "$l" ; done
+	scribe_out end of mail
+	exec 1>&4 4>&-
+}
+
+#
+#  Initialize variables
+
+VERSION=0.0
+IFS=""
+
+if [[ $this_shell = ksh ]] ; then
+	set -A TADDR 
+	set -A TNAME 
+	set -A ATTACH 
+	set -A FORMAT 
+	set -A DESC
+else
+	declare -a TADDR TNAME ATTACH FORMAT DESC
+fi
+
+((naddr=0))
+((nattach=0))
+((stdin_inuse=0))
+((error=0))
+((npart=0))
+
+preamble1="\
+        This message is in MIME format.  But if you can see this,
+        you aren't using a MIME aware mail program.  You shouldn't 
+        have too many problems because this message is entirely in
+        ASCII and is designed to be somewhat readable with old 
+        mail software."
+preamble2="
+        This message is in MIME format.  But if you can see this,
+        you aren't using a MIME aware mail program.  Some parts of
+        of this message have been uuencoded for transport.  On a Unix
+        system, the program uudecode should be used to restore the file."
+PREAMBLE="$preamble1"
+
+AType="text/plain"
+BType="application/octet-stream"
+
+if [[ $this_shell = ksh ]] ; then
+	CR="$(print \\r)"
+else
+	CR="$(echo -e \\r)"
+fi
+
+
+#############################################################
+#                                                           #
+#    Section 1 ---  Parameter Parsing and Checking          #
+#                                                           #
+#############################################################
+
+#
+#  Parse the command arguments
+
+while getopts ':df:F:t:T:b:A:B:D:X:s:' opt ; do
+	case $opt in
+	d)	DEBUG=1
+		MTA=debug_mta
+		scribe_debug Debug Mode is on...no mail will be sent
+		;;
+	f)	FADDR=$OPTARG
+		;;
+	F)	FNAME=$OPTARG
+		;;
+	t)
+		TADDR[naddr]=$OPTARG
+		TNAME[naddr]=""
+		((naddr=naddr+1))
+		;;
+	T)
+		if ((naddr)) ; then
+			TNAME[naddr-1]=$OPTARG
+		else
+			scribe_err -T must follow -t
+			((error=error+1))
+		fi
+		;;
+	b)
+		BODY=$OPTARG
+		((npart=npart+1))
+		;;
+	A|B|X)
+		[[ $opt = A ]] || PREAMBLE="$preamble2"
+		ATTACH[nattach]=$OPTARG
+		if [[ $OPTARG = - ]] ; then
+			DESC[nattach]=stdin
+		else
+			DESC[nattach]=$OPTARG
+		fi
+		FORMAT[nattach]=$opt
+		((nattach=nattach+1))
+		((npart=npart+1))
+		;;
+	D)
+		if ((nattach)) ; then
+			DESC[nattach-1]=$OPTARG
+		else
+			scribe_err -D $optarg must follow a -A argument
+			((error=error+1))
+		fi
+		;;
+	s)
+		SUBJECT=$OPTARG
+		;;
+	\?)
+		scribe_err what is -${OPTARG}?
+		((error=error+1))
+		;;
+	:)
+		scribe_err $OPTARG need an argument
+		((error=error+1))
+		;;
+	esac
+done
+
+#
+#  Parameter error checking: an address is required
+
+if ((!naddr)) ; then
+	scribe_err "-t ADDRESS is required"
+	((error=error+1))
+fi
+
+
+#
+#  Parameter error checking: If BODY  was specified, it
+#  must exist and be readable
+
+if [[ ! -z $BODY ]] ; then
+	if [[ $BODY != - ]] ; then
+		if [[ ! -f $BODY ||  ! -r $BODY ]] ; then
+			scribe_err  "-b $BODY is not a readable file"
+			((error=error+1))
+		fi
+	else
+		stdin_inuse=1
+	fi
+fi
+
+#
+#  Parameter error checking: If ATTACH was specified, it
+#  must exist and be readable.  
+#  Also we can use stdin only once
+
+i=0
+while ((i<nattach)); do
+	if [[ ${ATTACH[i]} = - ]] ; then
+		if ((stdin_inuse)) ; then
+			scribe_err  only one item may come from stdin
+			((errors=errors+1))
+		else
+			stdin_inuse=1
+		fi
+	else
+		if [[ ! -f ${ATTACH[i]} ||  ! -r ${ATTACH[i]} ]] ; then
+			scribe_err  -A ${ATTACH[i]} is not a readable file
+			((error=error+1))
+		fi
+	((i=i+1))
+	fi
+done
+
+#
+#  FADDR must not have a @ in it.
+
+#if [[ $FADDR = *@* ]] ; then
+#	scribe_err You cannot specify a remote \"From:\" address
+#	((error=error+1))
+#fi
+
+#
+# We will abort now if we didn't like our parameters
+
+if ((error)) ; then
+	scribe_err "at least one fatal error was detected...exiting"
+	exit 1
+fi
+
+
+
+#############################################################
+#                                                           #
+#    Section 2 ---  Build Header, Preamble, and Body        #
+#                                                           #
+#############################################################
+
+#
+#  Get user's name and address from the system
+
+
+scribe_debug pwentry = $pwentry
+if [[ $this_shell = ksh ]] ; then
+	((index=0))
+	while [[ $pwentry = *:* ]] ; do
+		pwfield[index]=${pwentry%%${pwentry##*([!:])}}
+		pwentry=${pwentry##*([!:]):}
+		((index=index+1))
+	done
+	pwfield[index]=${pwentry}
+	myname=${pwfield[4]%%,*}
+	myaddr=${pwfield[0]}
+else
+	myaddr=$(echo "$pwentry" | sed 's/\([^:]*\).*$/\1/')
+	myname=$(echo "$pwentry" | \
+			sed 's/[^:]*:[^:]*:[^:]*:[^:]*:\([^,:]*\).*$/\1/')
+fi
+
+scribe_debug myaddr = $myaddr
+scribe_debug myname = $myname
+
+
+#
+# NB the following brace.  It is the start of the stuff piped to the MTA
+
+{
+
+#
+#  Start with the "From:" Address
+
+if [[ -n $FADDR ]] ; then
+	if [[ -n $FNAME ]] ; then
+		scribe_out "From: $FNAME <${FADDR}>"
+	else
+		scribe_out "From: $myname <${FADDR}>"
+	fi
+	scribe_out  "Sender: $myname <${myaddr}>"
+elif [[ -n $FNAME ]] ; then
+	scribe_out "From: $FNAME <${myaddr}>"
+else
+	scribe_out  "From: $myname <${myaddr}>"
+fi
+
+#
+#  Next we will do the "To:" Addresses
+
+((i=0))
+Line=""
+while ((i<naddr)) ; do
+	if [[ -n ${TNAME[i]} ]] ; then
+		Addition="${TNAME[i]} <${TADDR[i]}>"
+	else
+		Addition="${TADDR[i]}"
+	fi
+
+	if [[ -n $Line &&  $((${#Line}+${#Addition})) -gt 75 ]] ; then
+		scribe_out "$Line"
+		Line=""
+	fi
+
+	if [[ -z $Line ]] ; then
+		Line="To: $Addition"
+	else
+		Line="$Line, $Addition"
+	fi
+	((i=i+1))
+done
+scribe_out "$Line"
+
+#
+#  Some misc header lines
+
+if [[ -n $SUBJECT ]] ; then
+	scribe_out  'Subject:' $SUBJECT
+fi
+scribe_out  'X-Mailer: mimesender' $VERSION
+scribe_out  'Mime-Version: 1.0'
+
+#
+#  Output Mime Preamble if there are multiple parts
+
+if ((npart>1)) ; then
+	scribe_out  'Content-Type: multipart/mixed; '
+	scribe_out  '    boundary='\"$BOUNDARY\"
+	scribe_out 
+	scribe_out  "$PREAMBLE"
+	scribe_out 
+fi
+
+#
+#  Output message body if we have one.
+
+if [[ -n $BODY ]] ; then
+	if ((npart>1)) ; then
+		scribe_out  "--${BOUNDARY}"
+	fi
+	scribe_out  'Content-Type: text/html; charset=UTF-8'
+	scribe_out 
+	if [[ $BODY = - ]] ; then
+		cat
+	else
+		cat $BODY
+	fi
+else
+	scribe_out
+fi
+
+#############################################################
+#                                                           #
+#    Section 3 ---  Attachments                             #
+#                                                           #
+#############################################################
+#
+
+#
+#  Loop on our attachments... 
+
+i=0
+while ((i<nattach)) ; do
+	scribe_debug Attachment $i ${ATTACH[i]} ${FORMAT[i]} ${DESC[i]}
+
+#
+#  If we are in mutipart mode, do a boundary
+
+	if ((npart>1)) ; then
+		scribe_out  "--${BOUNDARY}"
+	fi
+
+#
+#  Build attachment header
+
+	if [[ ${FORMAT[i]} = B ]] ; then
+		TYPE=$BType
+	else
+		TYPE=$AType
+	fi
+	scribe_out  'Content-Type: '${TYPE}'; name="'${ATTACH[i]}\"
+
+	if [[ ${FORMAT[i]} != A ]] ; then
+		scribe_out "Content-Transfer-Encoding: x-uue"
+	fi
+
+	scribe_out  'Content-Disposition: attachment; filename="'${DESC[i]}\"
+	scribe_out 
+
+#
+#  Build a pipeline to process the attachment
+
+	if [[ ${ATTACH[i]} = - ]] ; then
+		PIPELINE="cat"
+	else
+		PIPELINE="cat ${ATTACH[i]}"
+	fi
+	[[ ${FORMAT[i]} = X ]] && PIPELINE=${PIPELINE}"| sed \"s/$/\${CR}/\""
+	[[ ${FORMAT[i]} != A ]] && PIPELINE=${PIPELINE}"|uuencode ${DESC[i]}"
+	scribe_debug PIPELINE = "$PIPELINE"
+	eval $PIPELINE
+
+	scribe_out 
+	((i=i+1))
+done
+
+#############################################################
+#                                                           #
+#    Section 4 ---  Send Mail                               #
+#                                                           #
+#############################################################
+#
+
+#
+#  If in multipart mode, do final boundary
+
+if ((npart>1)) ; then
+	scribe_out  "--${BOUNDARY}--"
+fi
+
+#
+#  Here is where we send the mail
+
+} | eval $MTA ${TADDR[@]}
+
+if ((DEBUG)) ; then
+	while read l ; do scribe_debug "$l" ; done < $DEBUGFILE
+	rm $DEBUGFILE
+fi
+
+exit 0

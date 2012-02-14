@@ -34,14 +34,17 @@
 
 #include "buffer.h"
 #include "event.h"
+#include "whereami.h"
 
 /* strings */
 static char spawnFailed[] = "Failed to spawn your task, the system is probably overloaded. Please wait and try again.\n";
 static char taskQueued[] = "Your task has been queued. When it runs, you will receive the result via email.\n";
+static char fromAddress[] = "cs240-noreply@cs.purdue.edu";
+static char fromName[] = "CS240";
 
 
 /* tasks are of the form:
- * <begin timeout> <notify timeout> <max queue to block> <email to notify> <command> */
+ * <begin timeout> <notify timeout> <max queue to block> <email to notify> <subject line> <command> */
 
 /* a single task */
 struct Task {
@@ -50,8 +53,7 @@ struct Task {
     struct timeval notify;
     struct event notifyEv;
     int maxBlock;
-    char *email;
-    char *cmd;
+    char *email, *subject, *cmd;
 
     pid_t pid;
     int fd;
@@ -68,6 +70,9 @@ struct Connection {
 
 /* the queue is stored in a buffer */
 BUFFER(Task, struct Task *);
+
+/* mailer command to use (htmlsender) */
+static char *mailer;
 
 /* max fd (for clean closing) */
 static int maxFd;
@@ -91,7 +96,7 @@ static struct event cmdEv;
 static struct event chldEv;
 
 /* create a new task */
-struct Task *newTask(int socket, struct timeval begin, struct timeval notify, int maxBlock, char *email, char *cmd)
+struct Task *newTask(int socket, struct timeval begin, struct timeval notify, int maxBlock, char *email, char *subject, char *cmd)
 {
     struct Task *ret;
 
@@ -102,6 +107,7 @@ struct Task *newTask(int socket, struct timeval begin, struct timeval notify, in
     ret->notify = notify;
     ret->maxBlock = maxBlock;
     SF(ret->email, strdup, NULL, (email));
+    SF(ret->subject, strdup, NULL, (subject));
     SF(ret->cmd, strdup, NULL, (cmd));
 
     /* stuff that isn't used yet */
@@ -117,6 +123,7 @@ void deleteTask(struct Task *t)
 {
     if (t->socket >= 0) close(t->socket);
     free(t->email);
+    free(t->subject);
     free(t->cmd);
     if (t->output.buf)
         FREE_BUFFER(t->output);
@@ -213,7 +220,7 @@ void killConn(struct Connection *conn)
 void cmdRead(int fd, short event, void *connVp)
 {
     struct Connection *conn = connVp;
-    char *nl, *part, *npart, *email, *cmd;
+    char *nl, *part, *npart, *email, *subject, *cmd;
     int maxBlock;
     struct Task *task;
     struct timeval tv, begin, notify;
@@ -254,31 +261,38 @@ void cmdRead(int fd, short event, void *connVp)
 
     /* first, begin time */
     part = conn->buf.buf;
-    npart = strchr(part, ' ');
+    npart = strchr(part, ',');
     if (!npart) { killConn(conn); return; }
     *npart = '\0';
     begin.tv_sec += atoi(part);
     part = npart + 1;
 
     /* next, notification time */
-    npart = strchr(part, ' ');
+    npart = strchr(part, ',');
     if (!npart) { killConn(conn); return; }
     *npart = '\0';
     notify.tv_sec += atoi(part);
     part = npart + 1;
 
     /* then maximum queue to block for */
-    npart = strchr(part, ' ');
+    npart = strchr(part, ',');
     if (!npart) { killConn(conn); return; }
     *npart = '\0';
     maxBlock = atoi(part);
     part = npart + 1;
 
     /* then email address */
-    npart = strchr(part, ' ');
+    npart = strchr(part, ',');
     if (!npart) { killConn(conn); return; }
     *npart = '\0';
     email = part;
+    part = npart + 1;
+
+    /* then subject */
+    npart = strchr(part, ',');
+    if (!npart) { killConn(conn); return; }
+    *npart = '\0';
+    subject = part;
     part = npart + 1;
 
     /* finally, the actual command */
@@ -286,7 +300,7 @@ void cmdRead(int fd, short event, void *connVp)
 
 
     /* OK, now create a task structure for it */
-    task = newTask(fd, begin, notify, maxBlock, email, cmd);
+    task = newTask(fd, begin, notify, maxBlock, email, subject, cmd);
 
     /* get rid of the now-useless connection structure */
     event_del(&conn->ev);
@@ -510,6 +524,10 @@ void sigChild(int a, short b, void *c)
 void notifyTask(int fd, short event, void *taskVp)
 {
     struct Task *task = taskVp;
+    char tempFile[] = "/tmp/notify.XXXXXX";
+    int tempFd;
+    pid_t pid;
+    ssize_t wr;
 
     /* notify via socket */
     if (task->socket >= 0) {
@@ -518,7 +536,34 @@ void notifyTask(int fd, short event, void *taskVp)
         task->socket = -1;
     }
 
-    /* FIXME: then notify via email */
+    /* then notify via email */
+    tempFd = mkstemp(tempFile);
+    if (tempFd >= 0) {
+        /* write in the data */
+        wr = write(tempFd, task->output.buf, task->output.bufused);
+        close(tempFd);
+
+        /* then call our mailer */
+        pid = fork();
+        if (pid == 0) {
+            /* don't tell the mailer anything */
+            closeFds(-1);
+            dup2(open("/dev/null", O_RDONLY), 0);
+            dup2(open("/dev/null", O_WRONLY), 1);
+            dup2(1, 2);
+
+            /* run it */
+            execl(mailer, mailer, "-t", task->email, "-f", fromAddress, "-F", fromName, "-s", task->subject, "-b", tempFile, NULL);
+            exit(-1);
+            abort();
+
+        } else if (pid > 0) {
+            /* reap it and delete the temp file */
+            waitpid(pid, NULL, 0);
+            unlink(tempFile);
+
+        }
+    }
 
     deleteTask(task);
 }
@@ -534,6 +579,7 @@ int main(int argc, char **argv)
     char *cmdSockFn = NULL;
     struct sockaddr_un sun;
     struct rlimit rl;
+    char *dir, *fil;
 
     /* initialization */
     INIT_BUFFER(curTasks);
@@ -541,6 +587,15 @@ int main(int argc, char **argv)
     SF(tmpi, getrlimit, -1, (RLIMIT_NOFILE, &rl));
     maxFd = rl.rlim_cur;
     parallelTasks = 1;
+
+    /* use whereAmI to figure out our mailer */
+    if (!whereAmI(argv[0], &dir, &fil)) {
+        fprintf(stderr, "Cannot figure out my path, assuming /usr/bin.");
+        dir = "/usr/bin";
+    }
+
+    SF(mailer, malloc, NULL, (strlen(dir) + 12));
+    sprintf(mailer, "%s/htmlsender", dir);
 
     /* handle arguments */
     for (i = 1; i < argc; i++) {

@@ -3,7 +3,7 @@ CFLAGS=-g -O2
 LDFLAGS=
 LIBS=-levent
 
-TASKQUEUE_OBJS=taskqueue.o
+TASKQUEUE_OBJS=taskqueue.o whereami.o
 TASKENQUEUE_OBJS=taskenqueue.o
 
 all: taskqueue taskenqueue
