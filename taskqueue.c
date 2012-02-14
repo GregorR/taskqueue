@@ -537,8 +537,7 @@ void notifyTask(int fd, short event, void *taskVp)
     }
 
     /* then notify via email */
-    tempFd = mkstemp(tempFile);
-    if (tempFd >= 0) {
+    if (task->email[0] && (tempFd = mkstemp(tempFile)) >= 0) {
         /* write in the data */
         wr = write(tempFd, task->output.buf, task->output.bufused);
         close(tempFd);
