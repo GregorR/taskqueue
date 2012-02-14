@@ -44,9 +44,9 @@ int main(int argc, char **argv)
     SF(tmpi, connect, -1, (sock, (struct sockaddr *) &sun, sizeof(sun)));
 
     /* write the command */
+    wr = write(sock, "enqueue", 7);
     for (i = 2; i < argc; i++) {
-        if (i != 2)
-            wr = write(sock, (i < 8) ? "," : " ", 1);
+        wr = write(sock, (i < 8) ? "," : " ", 1);
         wr = write(sock, argv[i], strlen(argv[i]));
     }
     wr = write(sock, "\n", 1);

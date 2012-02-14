@@ -14,7 +14,7 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#define _BSD_SOURCE /* for strdup */
+#define _BSD_SOURCE /* for strdup, strsep */
 #define _POSIX_SOURCE /* for kill */
 
 #include <errno.h>
@@ -37,10 +37,11 @@
 #include "whereami.h"
 
 /* strings */
+static char unrecognizedCommand[] = "Unrecognized command.\n";
 static char spawnFailed[] = "Failed to spawn your task, the system is probably overloaded. Please wait and try again.\n";
 static char taskQueued[] = "Your task has been queued. When it runs, you will receive the result via email.\n";
-static char fromAddress[] = "cs240-noreply@cs.purdue.edu";
-static char fromName[] = "CS240";
+static char fromAddress[] = "noreply@localhost";
+static char fromName[] = "No Reply";
 
 
 /* tasks are of the form:
@@ -220,7 +221,7 @@ void killConn(struct Connection *conn)
 void cmdRead(int fd, short event, void *connVp)
 {
     struct Connection *conn = connVp;
-    char *nl, *part, *npart, *email, *subject, *cmd;
+    char *nl, *part, *saveptr = NULL, *cmd, *email, *subject;
     int maxBlock;
     struct Task *task;
     struct timeval tv, begin, notify;
@@ -259,64 +260,69 @@ void cmdRead(int fd, short event, void *connVp)
     begin = tv;
     notify = tv;
 
-    /* first, begin time */
-    part = conn->buf.buf;
-    npart = strchr(part, ',');
-    if (!npart) { killConn(conn); return; }
-    *npart = '\0';
-    begin.tv_sec += atoi(part);
-    part = npart + 1;
+    /* first the command */
+    saveptr = conn->buf.buf;
+    cmd = strsep(&saveptr, ",");
+    if (!cmd) { killConn(conn); return; }
 
-    /* next, notification time */
-    npart = strchr(part, ',');
-    if (!npart) { killConn(conn); return; }
-    *npart = '\0';
-    notify.tv_sec += atoi(part);
-    part = npart + 1;
+    if (!strcmp(cmd, "enqueue")) {
+        /* first, begin time */
+        part = strsep(&saveptr, ",");
+        if (!saveptr) { killConn(conn); return; }
+        begin.tv_sec += atoi(part);
 
-    /* then maximum queue to block for */
-    npart = strchr(part, ',');
-    if (!npart) { killConn(conn); return; }
-    *npart = '\0';
-    maxBlock = atoi(part);
-    part = npart + 1;
+        /* next, notification time */
+        part = strsep(&saveptr, ",");
+        if (!saveptr) { killConn(conn); return; }
+        notify.tv_sec += atoi(part);
 
-    /* then email address */
-    npart = strchr(part, ',');
-    if (!npart) { killConn(conn); return; }
-    *npart = '\0';
-    email = part;
-    part = npart + 1;
+        /* then maximum queue to block for */
+        part = strsep(&saveptr, ",");
+        if (!saveptr) { killConn(conn); return; }
+        maxBlock = atoi(part);
 
-    /* then subject */
-    npart = strchr(part, ',');
-    if (!npart) { killConn(conn); return; }
-    *npart = '\0';
-    subject = part;
-    part = npart + 1;
+        /* then email address */
+        email = strsep(&saveptr, ",");
+        if (!saveptr) { killConn(conn); return; }
 
-    /* finally, the actual command */
-    cmd = part;
+        /* then subject */
+        subject = strsep(&saveptr, ",");
+        if (!saveptr) { killConn(conn); return; }
+
+        /* finally, the actual command */
+        cmd = saveptr;
 
 
-    /* OK, now create a task structure for it */
-    task = newTask(fd, begin, notify, maxBlock, email, subject, cmd);
+        /* OK, now create a task structure for it */
+        task = newTask(fd, begin, notify, maxBlock, email, subject, cmd);
 
-    /* get rid of the now-useless connection structure */
-    event_del(&conn->ev);
-    FREE_BUFFER(conn->buf);
-    free(conn);
+        /* get rid of the now-useless connection structure */
+        event_del(&conn->ev);
+        FREE_BUFFER(conn->buf);
+        free(conn);
 
-    /* either delay or enqueue this task */
-    if (begin.tv_sec > tv.tv_sec) {
-        /* delay it */
-        task->begin.tv_sec -= tv.tv_sec;
-        task->begin.tv_usec = 0;
-        evtimer_set(&task->ev, beginTask, (void *) task);
-        evtimer_add(&task->ev, &task->begin);
+        /* either delay or enqueue this task */
+        if (begin.tv_sec > tv.tv_sec) {
+            /* delay it */
+            task->begin.tv_sec -= tv.tv_sec;
+            task->begin.tv_usec = 0;
+            evtimer_set(&task->ev, beginTask, (void *) task);
+            evtimer_add(&task->ev, &task->begin);
+        } else {
+            /* enqueue this task */
+            enqueueTask(task);
+        }
+
+    } else if (!strcmp(cmd, "stat")) {
+        char buf[100];
+        snprintf(buf, 100, "%d task%s\n", (int) taskQueue.bufused, (taskQueue.bufused == 1) ? "s" : "");
+        blockingWrite(conn->fd, buf);
+        killConn(conn);
+
     } else {
-        /* enqueue this task */
-        enqueueTask(task);
+        blockingWrite(conn->fd, unrecognizedCommand);
+        killConn(conn);
+
     }
 }
 
