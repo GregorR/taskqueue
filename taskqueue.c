@@ -545,7 +545,11 @@ void notifyTask(int fd, short event, void *taskVp)
     /* then notify via email */
     if (task->email[0] && (tempFd = mkstemp(tempFile)) >= 0) {
         /* write in the data */
+        wr = write(tempFd, "<html><head><title>", 19);
+        wr = write(tempFd, task->subject, strlen(task->subject));
+        wr = write(tempFd, "</title></head><body>", 21);
         wr = write(tempFd, task->output.buf, task->output.bufused);
+        wr = write(tempFd, "</body></html>", 14);
         close(tempFd);
 
         /* then call our mailer */
