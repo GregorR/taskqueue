@@ -5,9 +5,9 @@ LIBS=-levent
 
 TASKQUEUE_OBJS=taskqueue.o whereami.o
 TASKENQUEUE_OBJS=taskenqueue.o
-TASKQUEUESTAT_OBJS=taskqueuestat.o
+TASKQUEUESTAT_OBJS=taskqueuecmd.o
 
-all: taskqueue taskenqueue taskqueuestat
+all: taskqueue taskenqueue taskqueuecmd
 
 taskqueue: $(TASKQUEUE_OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(TASKQUEUE_OBJS) $(LIBS) -o taskqueue
@@ -15,8 +15,8 @@ taskqueue: $(TASKQUEUE_OBJS)
 taskenqueue: $(TASKENQUEUE_OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(TASKENQUEUE_OBJS) -o taskenqueue
 
-taskqueuestat: $(TASKQUEUESTAT_OBJS)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(TASKQUEUESTAT_OBJS) -o taskqueuestat
+taskqueuecmd: $(TASKQUEUESTAT_OBJS)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(TASKQUEUESTAT_OBJS) -o taskqueuecmd
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -24,4 +24,4 @@ taskqueuestat: $(TASKQUEUESTAT_OBJS)
 clean:
 	rm -f $(TASKQUEUE_OBJS) taskqueue
 	rm -f $(TASKENQUEUE_OBJS) taskenqueue
-	rm -f $(TASKQUEUESTAT_OBJS) taskqueuestat
+	rm -f $(TASKQUEUESTAT_OBJS) taskqueuecmd

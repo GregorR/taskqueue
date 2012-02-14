@@ -27,13 +27,13 @@
 
 int main(int argc, char **argv)
 {
-    int sock, tmpi;
+    int sock, i, tmpi;
     struct sockaddr_un sun;
     char buf[BUFSZ];
     ssize_t rd, wr;
 
-    if (argc < 2) {
-        fprintf(stderr, "Use: taskqueuestat <socket>\n");
+    if (argc < 3) {
+        fprintf(stderr, "Use: taskqueuestat <socket> <cmd>\n");
         return 1;
     }
 
@@ -44,12 +44,18 @@ int main(int argc, char **argv)
     SF(tmpi, connect, -1, (sock, (struct sockaddr *) &sun, sizeof(sun)));
 
     /* write the command */
-    wr = write(sock, "stat\n", 5);
+    for (i = 2; i < argc; i++) {
+        if (i != 2) wr = write(sock, ",", 1);
+        wr = write(sock, argv[i], strlen(argv[i]));
+    }
+    wr = write(sock, "\n", 1);
 
     /* now just wait for its response */
     while ((rd = read(sock, buf, BUFSZ)) > 0)
         wr = write(1, buf, rd);
     close(sock);
+
+    (void) wr;
 
     return 0;
 }

@@ -56,5 +56,7 @@ int main(int argc, char **argv)
         wr = write(1, buf, rd);
     close(sock);
 
+    (void) wr;
+
     return 0;
 }

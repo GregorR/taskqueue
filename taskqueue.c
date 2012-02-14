@@ -161,7 +161,7 @@ void blockingWrite(int fd, char *str)
 {
     ssize_t tmpss;
     blocking(fd);
-    tmpss = write(fd, str, strlen(str));
+    tmpss = write(fd, str, strlen(str)); (void) tmpss;
     nonblocking(fd);
 }
 
@@ -318,6 +318,10 @@ void cmdRead(int fd, short event, void *connVp)
         int ct = taskQueue.bufused + curTasks.bufused;
         snprintf(buf, 100, "%d task%s\n", ct, (ct == 1) ? "" : "s");
         blockingWrite(conn->fd, buf);
+        killConn(conn);
+
+    } else if (!strcmp(cmd, "stop")) {
+        event_loopbreak();
         killConn(conn);
 
     } else {
@@ -551,6 +555,7 @@ void notifyTask(int fd, short event, void *taskVp)
         wr = write(tempFd, "</title></head><body>", 21);
         wr = write(tempFd, task->output.buf, task->output.bufused);
         wr = write(tempFd, "</body></html>", 14);
+        (void) wr;
         close(tempFd);
 
         /* then call our mailer */
