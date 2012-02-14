@@ -36,8 +36,8 @@
 #include "event.h"
 
 /* strings */
-static char spawnFailed[] = "Failed to spawn your task, the system is probably overloaded. Please wait and try again.";
-static char taskQueued[] = "Your task has been queued. When it runs, you will receive the result via email.";
+static char spawnFailed[] = "Failed to spawn your task, the system is probably overloaded. Please wait and try again.\n";
+static char taskQueued[] = "Your task has been queued. When it runs, you will receive the result via email.\n";
 
 
 /* tasks are of the form:
@@ -81,9 +81,6 @@ static int parallelTasks;
 /* queued tasks */
 static struct Buffer_Task taskQueue;
 
-/* queued notifications */
-static struct Buffer_Task notificationQueue;
-
 /* the listening UNIX domain socket */
 static int cmdSock;
 
@@ -92,10 +89,6 @@ static struct event cmdEv;
 
 /* the event that's triggered when a SIGCHLD arrives */
 static struct event chldEv;
-
-/* the event that's triggered when a delayed event in the queue becomes
- * undelayed (NOTE: not used currently) */
-/* FIXME: event */
 
 /* create a new task */
 struct Task *newTask(int socket, struct timeval begin, struct timeval notify, int maxBlock, char *email, char *cmd)
@@ -175,6 +168,7 @@ void closeFds(int fd)
 
 void cmdConnection(int, short, void *);
 void cmdRead(int, short, void *);
+void beginTask(int, short, void *);
 void enqueueTask(struct Task *);
 void runTask(struct Task *);
 void killTask(struct Task *);
@@ -222,7 +216,7 @@ void cmdRead(int fd, short event, void *connVp)
     char *nl, *part, *npart, *email, *cmd;
     int maxBlock;
     struct Task *task;
-    struct timeval begin, notify;
+    struct timeval tv, begin, notify;
 
     /* read in as much as we can */
     while (1) {
@@ -254,13 +248,16 @@ void cmdRead(int fd, short event, void *connVp)
 
     /* we have a full line, interpret it */
     *nl = '\0';
-    gettimeofday(&begin, NULL);
-    notify = begin;
+    gettimeofday(&tv, NULL);
+    begin = tv;
+    notify = tv;
 
-    /* first, begin time (currently ignored) */
+    /* first, begin time */
     part = conn->buf.buf;
     npart = strchr(part, ' ');
     if (!npart) { killConn(conn); return; }
+    *npart = '\0';
+    begin.tv_sec += atoi(part);
     part = npart + 1;
 
     /* next, notification time */
@@ -296,7 +293,23 @@ void cmdRead(int fd, short event, void *connVp)
     FREE_BUFFER(conn->buf);
     free(conn);
 
-    /* and enqueue this task */
+    /* either delay or enqueue this task */
+    if (begin.tv_sec > tv.tv_sec) {
+        /* delay it */
+        task->begin.tv_sec -= tv.tv_sec;
+        task->begin.tv_usec = 0;
+        evtimer_set(&task->ev, beginTask, (void *) task);
+        evtimer_add(&task->ev, &task->begin);
+    } else {
+        /* enqueue this task */
+        enqueueTask(task);
+    }
+}
+
+/* begin this task (enqueue it after delay) */
+void beginTask(int fd, short event, void *taskVp)
+{
+    struct Task *task = taskVp;
     enqueueTask(task);
 }
 
@@ -441,7 +454,7 @@ void sigChild(int a, short b, void *c)
     /* first figure out from whom */
     pid_t pid;
     int i;
-    struct timeval tv;
+    struct timeval tv, tv2;
     
     while ((pid = waitpid(-1, NULL, WNOHANG)) > 0) {
         /* figure out the task */
@@ -478,15 +491,17 @@ void sigChild(int a, short b, void *c)
             notifyTask(0, 0, (void *) task);
         } else {
             /* time math */
-            if (tv.tv_usec < task->notify.tv_usec) {
-                tv.tv_usec += 1000000;
-                tv.tv_sec--;
+            tv2 = task->notify;
+            if (tv2.tv_usec < tv.tv_usec) {
+                tv2.tv_usec += 1000000;
+                tv2.tv_sec--;
             }
-            tv.tv_sec -= task->notify.tv_sec;
-            tv.tv_usec -= task->notify.tv_usec;
+            tv2.tv_sec -= tv.tv_sec;
+            tv2.tv_usec -= tv.tv_usec;
 
             /* now queue it */
             evtimer_set(&task->notifyEv, notifyTask, (void *) task);
+            evtimer_add(&task->notifyEv, &tv2);
         }
     }
 }
@@ -523,7 +538,6 @@ int main(int argc, char **argv)
     /* initialization */
     INIT_BUFFER(curTasks);
     INIT_BUFFER(taskQueue);
-    INIT_BUFFER(notificationQueue);
     SF(tmpi, getrlimit, -1, (RLIMIT_NOFILE, &rl));
     maxFd = rl.rlim_cur;
     parallelTasks = 1;
