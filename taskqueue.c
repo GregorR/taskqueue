@@ -315,7 +315,7 @@ void cmdRead(int fd, short event, void *connVp)
 
     } else if (!strcmp(cmd, "stat")) {
         char buf[100];
-        snprintf(buf, 100, "%d task%s\n", (int) taskQueue.bufused, (taskQueue.bufused == 1) ? "s" : "");
+        snprintf(buf, 100, "%d task%s\n", (int) taskQueue.bufused, (taskQueue.bufused == 1) ? "" : "s");
         blockingWrite(conn->fd, buf);
         killConn(conn);
 
