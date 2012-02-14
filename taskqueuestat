@@ -1,0 +1,8 @@
+#!/bin/sh
+if [ ! "$1" ]
+then
+    echo 'Use: taskqueuestat <socket>' >&2
+    exit 1
+fi
+
+`dirname "$0"`/taskqueuecmd "$1" stat

@@ -33,7 +33,7 @@ int main(int argc, char **argv)
     ssize_t rd, wr;
 
     if (argc < 3) {
-        fprintf(stderr, "Use: taskqueuestat <socket> <cmd>\n");
+        fprintf(stderr, "Use: taskqueuecmd <socket> <cmd>\n");
         return 1;
     }
 
