@@ -350,7 +350,7 @@ void enqueueTask(struct Task *task)
         task->socket = -1;
     }
 
-    if (curTasks.bufused < parallelTasks) {
+    if (curTasks.bufused < parallelTasks && taskIsRunnable(task)) {
         /* just run it */
         runTask(task);
         return;
@@ -358,6 +358,18 @@ void enqueueTask(struct Task *task)
 
     /* add it to the queue */
     WRITE_ONE_BUFFER(taskQueue, task);
+}
+
+/* a task is runnable if there is no identical task currently running */
+int taskIsRunnable(struct Task *task)
+{
+    int i;
+
+    for (i = 0; i < curTasks.bufused; i++) {
+        if (!strcmp(curTasks.buf[i]->cmd, task->cmd)) return 0;
+    }
+
+    return 1;
 }
 
 /* actually run this task */
@@ -503,10 +515,13 @@ void sigChild(int a, short b, void *c)
         event_del(&task->ev);
 
         /* and run a task if there are any in the queue */
-        if (taskQueue.bufused > 0) {
-            struct Task *nextTask = taskQueue.buf[0];
-            removeTask(&taskQueue, 0);
-            runTask(nextTask);
+        for (i = 0; i < taskQueue.bufused; i++) {
+            struct Task *nextTask = taskQueue.buf[i];
+            if (taskIsRunnable(nextTask)) {
+                removeTask(&taskQueue, i);
+                runTask(nextTask);
+                break;
+            }
         }
 
         /* figure out when to notify the task */
