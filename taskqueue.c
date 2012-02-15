@@ -402,6 +402,8 @@ void runTask(struct Task *task)
     }
 
     if (pid == 0) {
+        setsid();
+
         /* child, only need the write end of the pipe */
         closeFds(taskIo[1]);
 
@@ -576,6 +578,8 @@ void notifyTask(int fd, short event, void *taskVp)
         /* then call our mailer */
         pid = fork();
         if (pid == 0) {
+            setsid();
+
             /* don't tell the mailer anything */
             closeFds(-1);
             dup2(open("/dev/null", O_RDONLY), 0);
